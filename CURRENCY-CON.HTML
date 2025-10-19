@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Auto Currency Converter — Free & Live | YourSiteName</title>
+  <meta name="description" content="Live, automatic currency converter. Convert between any world currencies with up-to-date exchange rates. Free—no API key required." />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="canonical" href="https://yourdomain.com/tools/currency-converter.html" />
+  <style>
+    :root{
+      --bg:#f7f9fb; --card:#ffffff; --accent:#0b78d1; --muted:#6b7280;
+      --radius:12px; --shadow: 0 6px 20px rgba(11,119,209,0.08);
+      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; background:var(--bg); color:#0f172a; -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale; padding:28px;
+      display:flex; align-items:center; justify-content:center; min-height:100vh;
+    }
+    .card{
+      background:var(--card); width:100%; max-width:920px; border-radius:var(--radius);
+      box-shadow:var(--shadow); padding:22px;
+    }
+    header h1{margin:0 0 6px 0; font-size:20px}
+    header p{margin:0; color:var(--muted); font-size:13px}
+    .grid{
+      display:grid; grid-template-columns: 1fr 1fr; gap:16px; margin-top:18px;
+    }
+    label{display:block; font-size:13px; color:var(--muted); margin-bottom:8px}
+    select, input[type="number"]{
+      width:100%; padding:10px 12px; border-radius:10px; border:1px solid #e6eef7;
+      background:#fff; font-size:15px;
+    }
+    .controls{display:flex; gap:10px; align-items:center}
+    .swap-btn{
+      display:inline-flex; align-items:center; justify-content:center; padding:10px; border-radius:10px;
+      border:1px dashed #dbeafe; background:#fff; cursor:pointer;
+    }
+    .swap-btn:hover{transform:translateY(-1px)}
+    .result{
+      margin-top:18px; padding:14px; border-radius:10px; background:#fbfdff; border:1px solid #eef6ff;
+    }
+    .result .amount{font-weight:700; font-size:20px}
+    .meta{margin-top:10px; color:var(--muted); font-size:13px}
+    .actions{display:flex; gap:8px; margin-top:12px}
+    button.primary{
+      background:var(--accent); color:#fff; padding:10px 12px; border-radius:10px; border:0; cursor:pointer;
+    }
+    button.ghost{background:#fff; border:1px solid #e6eef7; padding:10px 12px; border-radius:10px; cursor:pointer;}
+    .note{margin-top:12px; color:var(--muted); font-size:13px}
+    @media (max-width:720px){
+      .grid{grid-template-columns:1fr}
+    }
+  </style>
+</head>
+<body>
+  <main class="card" role="main" aria-labelledby="title">
+    <header>
+      <h1 id="title">Auto Currency Converter</h1>
+      <p>Convert between 170+ currencies with live exchange rates (source: exchangerate.host)</p>
+    </header>
+
+    <section aria-labelledby="converter" style="margin-top:12px">
+      <h2 id="converter" style="display:none">Converter</h2>
+
+      <div class="grid" aria-hidden="false">
+        <div>
+          <label for="amount">Amount</label>
+          <input id="amount" type="number" inputmode="decimal" min="0" step="any" value="1" aria-describedby="amountHelp" />
+          <div id="amountHelp" class="note">Type an amount — conversion updates automatically.</div>
+        </div>
+
+        <div class="controls" style="align-items:flex-end">
+          <div style="flex:1">
+            <label for="from">From</label>
+            <select id="from" aria-label="From currency"></select>
+          </div>
+
+          <button class="swap-btn" id="swap" title="Swap currencies" aria-label="Swap currencies">
+            ⇄
+          </button>
+
+          <div style="flex:1">
+            <label for="to">To</label>
+            <select id="to" aria-label="To currency"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="result" aria-live="polite">
+        <div class="amount" id="converted">—</div>
+        <div class="meta" id="rateInfo">Rates: —</div>
+        <div class="meta" id="updatedAt">Updated: —</div>
+
+        <div class="actions">
+          <button class="primary" id="copyBtn">Copy Result</button>
+          <button class="ghost" id="refreshBtn" title="Refresh rates">Refresh</button>
+        </div>
+
+        <div class="note">Note: Rates provided by <a href="https://exchangerate.host" target="_blank" rel="noopener noreferrer">exchangerate.host</a>. This tool uses client-side requests — no API key required.</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+  // ---- Config ----
+  const API = "https://api.exchangerate.host";
+  const REFRESH_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
+
+  // ---- Elements ----
+  const amountEl = document.getElementById("amount");
+  const fromEl = document.getElementById("from");
+  const toEl = document.getElementById("to");
+  const convertedEl = document.getElementById("converted");
+  const rateInfoEl = document.getElementById("rateInfo");
+  const updatedAtEl = document.getElementById("updatedAt");
+  const swapBtn = document.getElementById("swap");
+  const copyBtn = document.getElementById("copyBtn");
+  const refreshBtn = document.getElementById("refreshBtn");
+
+  // ---- State ----
+  let symbols = {};           // { "USD": "United States Dollar", ... }
+  let latestRates = {};       // rates relative to base
+  let latestBase = "EUR";     // API default
+  let lastFetchedAt = null;
+  let debounceTimer = null;
+
+  // ---- Helpers ----
+  function formatNumber(n){
+    // format with up to 6 significant digits, but keep decimals if needed
+    if (!isFinite(n)) return "—";
+    if (Math.abs(n) >= 1) return Number(n.toFixed(2)).toLocaleString();
+    return Number(n.toPrecision(6)).toString();
+  }
+
+  function showError(msg){
+    convertedEl.textContent = msg;
+    rateInfoEl.textContent = "";
+  }
+
+  async function fetchSymbols(){
+    try{
+      const res = await fetch(`${API}/symbols`);
+      if(!res.ok) throw new Error("Symbols fetch failed");
+      const data = await res.json();
+      if(data && data.symbols){
+        symbols = Object.fromEntries(Object.entries(data.symbols).map(([k,v]) => [k, v.description]));
+        populateCurrencyPickers();
+      } else throw new Error("Symbols missing in response");
+    }catch(err){
+      console.error("Failed to load symbols", err);
+      showError("Failed to load currency list.");
+    }
+  }
+
+  function populateCurrencyPickers(){
+    // Create options
+    const keys = Object.keys(symbols).sort();
+    const makeOption = code => {
+      const opt = document.createElement("option");
+      opt.value = code;
+      opt.textContent = `${code} — ${symbols[code] || ""}`;
+      return opt;
+    };
+
+    // Clear
+    fromEl.innerHTML = "";
+    toEl.innerHTML = "";
+
+    keys.forEach(code => {
+      fromEl.appendChild(makeOption(code));
+      toEl.appendChild(makeOption(code));
+    });
+
+    // Set sensible defaults if available
+    const defaultFrom = keys.includes("USD") ? "USD" : keys[0];
+    const defaultTo = keys.includes("EUR") ? "EUR" : (keys[1] || keys[0]);
+
+    fromEl.value = defaultFrom;
+    toEl.value = defaultTo;
+  }
+
+  async function fetchLatestRates(base){
+    try{
+      const res = await fetch(`${API}/latest?base=${encodeURIComponent(base)}`);
+      if(!res.ok) throw new Error("Rates fetch failed");
+      const data = await res.json();
+      if(data && data.rates){
+        latestRates = data.rates;
+        latestBase = data.base || base;
+        lastFetchedAt = new Date(data.timestamp ? data.timestamp * 1000 : Date.now());
+        return latestRates;
+      } else throw new Error("Rates missing in response");
+    }catch(err){
+      console.error("Failed to fetch rates", err);
+      throw err;
+    }
+  }
+
+  async function convert(){
+    const amount = parseFloat(amountEl.value || "0");
+    const from = fromEl.value;
+    const to = toEl.value;
+
+    if(!symbols[from] || !symbols[to]) {
+      showError("Select currencies.");
+      return;
+    }
+    if(isNaN(amount)){
+      showError("Invalid amount");
+      return;
+    }
+
+    // If rates are not for current base, fetch for 'from' to simplify conversion:
+    try{
+      // If we already have rates and they are relative to 'from', reuse them
+      if(latestBase !== from || !latestRates || !latestRates[to]){
+        await fetchLatestRates(from);
+      }
+
+      const rate = latestRates[to];
+      if(!isFinite(rate)){
+        showError("Rate unavailable");
+        return;
+      }
+
+      const converted = amount * rate;
+      convertedEl.textContent = `${formatNumber(converted)} ${to}`;
+      rateInfoEl.textContent = `1 ${from} = ${formatNumber(rate)} ${to}`;
+      updatedAtEl.textContent = `Updated: ${lastFetchedAt ? lastFetchedAt.toLocaleString() : "just now"}`;
+    }catch(err){
+      showError("Unable to convert right now.");
+      updatedAtEl.textContent = "";
+    }
+  }
+
+  // ---- Debounce input to avoid excessive API calls ----
+  function scheduleConvert(delay = 300){
+    if(debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(convert, delay);
+  }
+
+  // ---- Events ----
+  amountEl.addEventListener("input", () => scheduleConvert());
+  fromEl.addEventListener("change", () => scheduleConvert(0));
+  toEl.addEventListener("change", () => scheduleConvert(0));
+
+  swapBtn.addEventListener("click", () => {
+    const a = fromEl.value;
+    fromEl.value = toEl.value;
+    toEl.value = a;
+    scheduleConvert(0);
+  });
+
+  copyBtn.addEventListener("click", async () => {
+    try{
+      const text = convertedEl.textContent || "";
+      await navigator.clipboard.writeText(text);
+      copyBtn.textContent = "Copied!";
+      setTimeout(()=> copyBtn.textContent = "Copy Result", 1200);
+    }catch(e){
+      copyBtn.textContent = "Copy";
+      alert("Unable to copy. Select and copy manually.");
+    }
+  });
+
+  refreshBtn.addEventListener("click", async () => {
+    refreshBtn.disabled = true;
+    refreshBtn.textContent = "Refreshing...";
+    try{
+      // Force re-fetch using current 'from' as base
+      await fetchLatestRates(fromEl.value);
+      await convert();
+    }catch(e){
+      alert("Refresh failed. Check console for details.");
+    } finally {
+      refreshBtn.disabled = false;
+      refreshBtn.textContent = "Refresh";
+    }
+  });
+
+  // ---- Auto refresh every REFRESH_INTERVAL_MS while page is open ----
+  let autoRefreshHandle = null;
+  function startAutoRefresh(){
+    if(autoRefreshHandle) clearInterval(autoRefreshHandle);
+    autoRefreshHandle = setInterval(() => {
+      // re-run a silent fetch for current 'from' base and update UI if rates changed
+      fetchLatestRates(fromEl.value).then(()=> convert()).catch(()=>{/*silent*/});
+    }, REFRESH_INTERVAL_MS);
+  }
+
+  // ---- Init ----
+  (async function init(){
+    try{
+      await fetchSymbols();
+      // initial convert (will fetch rates)
+      await convert();
+      startAutoRefresh();
+    }catch(err){
+      // If initial convert failed due to network/API issues, try a basic fallback:
+      console.warn("Initial load failed, trying fallback rates");
+      try{
+        // Try fetching rates with default base
+        await fetchLatestRates(latestBase);
+        await convert();
+      }catch(e){
+        showError("Unable to load rates. Check your internet connection.");
+      }
+    }
+  })();
+
+  // Accessibility: allow pressing Enter on selects/inputs to convert
+  [amountEl, fromEl, toEl].forEach(el => {
+    el.addEventListener("keydown", (ev) => {
+      if(ev.key === "Enter") convert();
+    });
+  });
+  </script>
+</body>
+</html>
